@@ -1,0 +1,12 @@
+name: spark
+help: A collection of helpful commands for Spark
+version: 0.1.0
+
+commands:
+  - name: up
+    alias: [u, start]
+    help: Start the project
+
+  - name: down
+    alias: [d, stop]
+    help: Stop the project
