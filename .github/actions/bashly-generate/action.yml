@@ -1,0 +1,5 @@
+name: "Bashly Generate"
+description: "Generates script from Bashly configuration"
+runs:
+  using: "docker"
+  image: "./Dockerfile"

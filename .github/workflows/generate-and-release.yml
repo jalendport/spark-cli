@@ -2,7 +2,7 @@ name: Generate & Release
 on:
   push:
     tags:
-      - '**'
+      - "**"
   workflow_dispatch:
 jobs:
   generate:
@@ -10,3 +10,6 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
+      - name: Generate the script
+        uses: ./.github/actions/bashly-generate
+      - run: cd dist && ls -la
