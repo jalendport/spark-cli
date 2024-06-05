@@ -1,0 +1,12 @@
+name: Generate & Release
+on:
+  push:
+    tags:
+      - '**'
+  workflow_dispatch:
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
