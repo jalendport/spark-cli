@@ -1,0 +1,6 @@
+{
+  "boilerplates": [
+    { "name": "craft", "repo": "jalendport/spark-craft", "description": "Craft CMS boilerplate" },
+    { "name": "craft-lab", "repo": "jalendport/spark-craft-lab", "description": "Disposable Craft instances for plugin dev" }
+  ]
+}
