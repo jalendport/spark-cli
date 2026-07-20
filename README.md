@@ -1,6 +1,6 @@
-<p align="center"><img src=".github/icon.svg" alt="Spark" width="80" height="80"></p>
+<p align="center"><img src=".github/icon.svg" alt="Spark CLI" width="80" height="80"></p>
 
-<h1 align="center">Spark</h1>
+<h1 align="center">Spark CLI</h1>
 
 <p align="center"><em>One CLI for every Spark project: scaffold, run, and test from a single binary.</em></p>
 
