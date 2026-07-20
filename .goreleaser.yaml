@@ -1,0 +1,33 @@
+version: 2
+
+builds:
+  - binary: spark
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -X main.version={{ .Version }}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: spark_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+homebrew_casks:
+  - name: spark
+    repository:
+      owner: jalendport
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/jalendport/spark-cli
+    description: A slick CLI for Spark boilerplate projects
+    binaries:
+      - spark
