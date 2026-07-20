@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jalendport/spark-cli/internal/create"
 	"github.com/jalendport/spark-cli/internal/lab"
 	"github.com/jalendport/spark-cli/internal/manifest"
 	"github.com/jalendport/spark-cli/internal/proc"
@@ -90,13 +91,7 @@ func (a *app) build() *cobra.Command {
 			return nil
 		},
 	})
-	root.AddCommand(&cobra.Command{
-		Use: "create",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			ui.Fprintln(os.Stdout, "spark create — coming soon")
-			return nil
-		},
-	})
+	root.AddCommand(create.NewCommand())
 
 	// `lab` is a global built-in: it runs inside Craft plugin repos (which have
 	// no spark.yml), so it is available regardless of project detection.
