@@ -126,8 +126,8 @@ func detectPlugin(override string) (dir, name, handle string, err error) {
 	if name == "" {
 		return "", "", "", fmt.Errorf("plugin composer.json is missing a package name")
 	}
-	// A missing extra.handle is not an error here: only `up` needs it (to mint
-	// and serve /test/<handle>). list/destroy/prune must keep working so
+	// A missing extra.handle is not an error here: only `up` needs it (to
+	// install the plugin at mint). list/destroy/prune must keep working so
 	// existing instances can always be inspected and cleaned up.
 	return found, name, pluginHandle(meta), nil
 }

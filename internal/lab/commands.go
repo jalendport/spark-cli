@@ -46,10 +46,10 @@ func upCommand() *cobra.Command {
 			name := instanceName(token, spec)
 			dest := c.instanceDir(name)
 
-			// Minting serves /test/<handle>; the other lab commands operate on
+			// Minting installs the plugin by handle; the other lab commands operate on
 			// already-minted instances and don't need a handle.
 			if c.handle == "" {
-				return fmt.Errorf("plugin composer.json is missing extra.handle (required to serve /test/<handle>)")
+				return fmt.Errorf("plugin composer.json is missing extra.handle (required to install the plugin)")
 			}
 
 			fresh := false
@@ -241,7 +241,7 @@ func seedCommand() *cobra.Command {
 			if err := runSeed(dir); err != nil {
 				return err
 			}
-			ui.Successf("reseeded %s: http://localhost:%d/test/%s", name, meta.WebPort, meta.Handle)
+			ui.Successf("reseeded %s: http://localhost:%d/lab-test", name, meta.WebPort)
 			return nil
 		},
 	}
@@ -335,7 +335,7 @@ func summarize(meta instanceMeta) {
 	lines := []string{
 		fmt.Sprintf("  site:    %s", base),
 		fmt.Sprintf("  cp:      %s/admin  (%s / %s)", base, adminUsername, adminPassword),
-		fmt.Sprintf("  test:    %s/test/%s", base, meta.Handle),
+		fmt.Sprintf("  test:    %s/lab-test", base),
 		fmt.Sprintf("  mailpit: http://localhost:%d", meta.MailpitPort),
 		fmt.Sprintf("  craft:   spark lab craft %s <command>", meta.Name),
 	}
