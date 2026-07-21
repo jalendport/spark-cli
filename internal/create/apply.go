@@ -192,27 +192,36 @@ func applyReplace(root string, replace map[string]string, answers map[string]str
 	})
 }
 
-// runPost executes each post shell command via `sh -c` from the project root,
-// echoing it first and passing through stdio.
-func runPost(root string, post []string) error {
-	for _, script := range post {
+// runScripts executes each shell command via `sh -c` from dir, echoing it first
+// and passing through stdio. It stops at the first failure and returns that
+// command's index, so a caller can report the ones left unrun; on success it
+// returns len(scripts). A command that ran and exited nonzero yields a
+// proc.ExitError carrying its real code, while a failure to start is a plain
+// error. Both runPost (create: section) and runSetup share this loop.
+func runScripts(dir string, scripts []string) (int, error) {
+	for i, script := range scripts {
 		ui.Echo(script)
 		cmd := exec.Command("sh", "-c", script)
-		cmd.Dir = root
+		cmd.Dir = dir
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			// A command that ran and exited nonzero should pass its real code
-			// through to the CLI; only a failure to start is a plain error.
 			var ee *exec.ExitError
 			if errors.As(err, &ee) {
-				return &proc.ExitError{Code: ee.ExitCode()}
+				return i, &proc.ExitError{Code: ee.ExitCode()}
 			}
-			return fmt.Errorf("post command failed (%s): %w", script, err)
+			return i, fmt.Errorf("command failed (%s): %w", script, err)
 		}
 	}
-	return nil
+	return len(scripts), nil
+}
+
+// runPost executes the create: section's post commands from the project root.
+// Any failure aborts the build, so the failing command's index is discarded.
+func runPost(root string, post []string) error {
+	_, err := runScripts(root, post)
+	return err
 }
 
 // gitInit initializes a fresh git repository at root without making an initial

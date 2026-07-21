@@ -41,6 +41,15 @@ type Create struct {
 	Rename  map[string]string `yaml:"rename"`
 	Replace map[string]string `yaml:"replace"`
 	Post    []string          `yaml:"post"`
+
+	// Setup lists shell commands run from the project directory once it has
+	// already been moved into its final location — after scaffolding finishes,
+	// behind a confirmation prompt. This is deliberately distinct from Post,
+	// which runs in the pre-rename temporary build directory: setup commands
+	// may start docker compose, and compose derives its project name and
+	// bind-mount paths from the working directory, so they must only ever run
+	// with the project sitting in its real home, never in the temp dir.
+	Setup []string `yaml:"setup"`
 }
 
 // Manifest is a loaded spark.yml plus the resolved project root.

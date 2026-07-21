@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jalendport/spark-cli/internal/manifest"
+	"github.com/jalendport/spark-cli/internal/proc"
 )
 
 func TestBuildIntoSuccess(t *testing.T) {
@@ -73,6 +74,139 @@ func TestBuildIntoRejectsNonEmptyDir(t *testing.T) {
 	}
 	if called {
 		t.Error("fn should not run when the destination is non-empty")
+	}
+}
+
+func TestParseConfirm(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"", true}, // a blank line defaults to yes
+		{"y", true},
+		{"Y", true},
+		{"yes", true},
+		{"YES", true},
+		{"  y  ", true},
+		{"n", false},
+		{"no", false},
+		{"nope", false},
+		{"x", false},
+	}
+	for _, c := range cases {
+		if got := parseConfirm(c.in); got != c.want {
+			t.Errorf("parseConfirm(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestConfirm(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		// A bare newline is a deliberate blank answer, which defaults to yes.
+		{"blank line yes default", "\n", true},
+		{"explicit yes", "y\n", true},
+		{"explicit no", "n\n", false},
+		// Stdin that runs out with nothing typed is a decline, never an error.
+		{"eof declines", "", false},
+	}
+	for _, c := range cases {
+		rd := bufio.NewReader(strings.NewReader(c.in))
+		if got := confirm(rd, io.Discard, "Set up?"); got != c.want {
+			t.Errorf("%s: confirm(%q) = %v, want %v", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+func TestNextSteps(t *testing.T) {
+	dir := "/tmp/site"
+	cases := []struct {
+		name string
+		o    setupOutcome
+		want []string
+	}{
+		{
+			// No setup section: cd then spark up (nothing has started the stack).
+			name: "no setup section",
+			o:    setupOutcome{hasSetup: false},
+			want: []string{"cd /tmp/site", "spark up"},
+		},
+		{
+			// Setup fully succeeded: just cd — the stack is already running.
+			name: "setup succeeded",
+			o:    setupOutcome{hasSetup: true, remaining: nil},
+			want: []string{"cd /tmp/site"},
+		},
+		{
+			// Declined: every setup command becomes a manual next step.
+			name: "setup declined",
+			o:    setupOutcome{hasSetup: true, remaining: []string{"docker compose up -d", "spark composer install"}},
+			want: []string{"cd /tmp/site", "docker compose up -d", "spark composer install"},
+		},
+		{
+			// Partially failed: only the failing command and everything after it.
+			name: "setup partially failed",
+			o:    setupOutcome{hasSetup: true, remaining: []string{"spark composer install"}},
+			want: []string{"cd /tmp/site", "spark composer install"},
+		},
+	}
+	for _, c := range cases {
+		got := nextSteps(dir, c.o)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: nextSteps = %v, want %v", c.name, got, c.want)
+			continue
+		}
+		for i := range c.want {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: nextSteps[%d] = %q, want %q", c.name, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+func TestRunSetupPropagatesExitCodeAndRemaining(t *testing.T) {
+	// The first command succeeds, the second exits nonzero: the exit code must
+	// ride up and the failing command plus the unrun tail must come back.
+	setup := []string{"true", "exit 5", "echo never"}
+	remaining, err := runSetup(t.TempDir(), setup)
+	code, ok := proc.Code(err)
+	if !ok || code != 5 {
+		t.Fatalf("runSetup exit code = (%d, %v), want (5, true)", code, ok)
+	}
+	want := []string{"exit 5", "echo never"}
+	if len(remaining) != len(want) {
+		t.Fatalf("remaining = %v, want %v", remaining, want)
+	}
+	for i := range want {
+		if remaining[i] != want[i] {
+			t.Errorf("remaining[%d] = %q, want %q", i, remaining[i], want[i])
+		}
+	}
+}
+
+func TestRunSetupSuccess(t *testing.T) {
+	remaining, err := runSetup(t.TempDir(), []string{"true", "true"})
+	if err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+	if remaining != nil {
+		t.Errorf("remaining = %v, want nil on success", remaining)
+	}
+}
+
+func TestSetupCommands(t *testing.T) {
+	if got := setupCommands(nil); got != nil {
+		t.Errorf("setupCommands(nil) = %v, want nil", got)
+	}
+	if got := setupCommands(&manifest.Manifest{}); got != nil {
+		t.Errorf("setupCommands(no create) = %v, want nil", got)
+	}
+	m := &manifest.Manifest{Create: &manifest.Create{Setup: []string{"true"}}}
+	if got := setupCommands(m); len(got) != 1 || got[0] != "true" {
+		t.Errorf("setupCommands = %v, want [true]", got)
 	}
 }
 

@@ -86,24 +86,69 @@ func Run(boilerplate, directory string) error {
 
 	// Assemble everything in a temporary sibling directory and move it into place
 	// only once every step succeeds, so any failure leaves nothing half-built
-	// behind (and a pre-existing empty destination untouched).
+	// behind (and a pre-existing empty destination untouched). The manifest is
+	// captured here so the setup: commands and the final summary can consult it
+	// after the build closure returns.
+	var m *manifest.Manifest
 	err = buildInto(abs, func(dir string) error {
 		ui.Stepf("downloading %s", bp.Repo)
 		if err := downloadBoilerplate(bp.Repo, dir); err != nil {
 			return err
 		}
-		m, err := manifest.Load(dir)
+		loaded, err := manifest.Load(dir)
 		if err != nil {
 			return fmt.Errorf("the boilerplate has no readable %s: %w", manifest.Filename, err)
 		}
+		m = loaded
 		return setupProject(dir, m, rd, os.Stdout)
 	})
 	if err != nil {
 		return err
 	}
 
-	summary(bp, target)
-	return nil
+	// Setup commands run only now that the project sits in its final home: they
+	// may start docker compose, whose project name and bind-mount paths derive
+	// from the working directory, so they must never see the temporary build
+	// dir. A failure prints its own notice and falls through to the summary with
+	// the unfinished commands, but is still returned so the exit code rides up.
+	setup := setupCommands(m)
+	outcome := setupOutcome{hasSetup: len(setup) > 0}
+	var runErr error
+	switch {
+	case outcome.hasSetup && confirm(rd, os.Stdout, "Set up the project now? [Y/n]"):
+		if remaining, err := runSetup(abs, setup); err != nil {
+			outcome.remaining = remaining
+			ui.Errorf("setup did not finish — run the remaining steps below by hand")
+			runErr = err
+		}
+	case outcome.hasSetup:
+		// Declined: every setup command becomes a manual next step.
+		outcome.remaining = setup
+	}
+
+	summary(bp, target, outcome)
+	return runErr
+}
+
+// setupCommands returns the manifest's create: setup commands, or nil when the
+// boilerplate declares none.
+func setupCommands(m *manifest.Manifest) []string {
+	if m == nil || m.Create == nil {
+		return nil
+	}
+	return m.Create.Setup
+}
+
+// runSetup runs the setup commands from the final project directory dir. On the
+// first failure it returns the commands still needing a hand — the one that
+// failed and everything after it — alongside the error (a proc.ExitError
+// carrying the child's code), so the caller can both print an accurate NEXT
+// STEPS block and propagate the exit code. On success it returns (nil, nil).
+func runSetup(dir string, setup []string) (remaining []string, err error) {
+	if i, err := runScripts(dir, setup); err != nil {
+		return setup[i:], err
+	}
+	return nil, nil
 }
 
 // setupProject runs the manifest's create: section (when present) against the
@@ -186,6 +231,36 @@ func promptLine(rd *bufio.Reader, out io.Writer, label string) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// confirm prints a styled yes/no prompt and reads one line, defaulting to yes.
+// A read failure — including EOF on a closed or empty stdin — is treated as a
+// decline rather than an error, so an unattended run never blocks or crashes on
+// the optional setup step; it simply skips it.
+func confirm(rd *bufio.Reader, out io.Writer, label string) bool {
+	fmt.Fprint(out, ui.CommandName.Render(label)+ui.Dim.Render(" › "))
+	line, err := rd.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false
+	}
+	// Distinguish a deliberate blank answer (Enter → "\n", defaults to yes) from
+	// input that ran out before anything was typed (EOF with nothing → decline).
+	if err == io.EOF && strings.TrimSpace(line) == "" {
+		return false
+	}
+	return parseConfirm(line)
+}
+
+// parseConfirm reads a yes/no answer where a blank line defaults to yes. It
+// accepts y/yes in any case as yes and treats everything else as no. Kept pure
+// so the confirm logic is testable without a reader.
+func parseConfirm(answer string) bool {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "", "y", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 // checkEmptyDir validates target as a fresh project directory without creating
 // anything: it must be absent or an existing empty directory (a non-empty one is
 // refused). It reports whether target already exists so the caller can preserve
@@ -204,14 +279,42 @@ func checkEmptyDir(target string) (exists bool, err error) {
 	return true, nil
 }
 
-// summary prints the styled success block with the next steps.
-func summary(bp Boilerplate, dir string) {
+// setupOutcome records what became of a boilerplate's setup: commands so the
+// summary can print accurate next steps. A boilerplate with no setup: section
+// is the zero value (hasSetup false).
+type setupOutcome struct {
+	hasSetup  bool     // the manifest declared setup commands
+	remaining []string // commands still to run by hand: all when declined, the failing tail after an error, none on success
+}
+
+// nextSteps returns the NEXT STEPS command lines for dir given the setup
+// outcome. Kept pure so the selection is testable without any terminal:
+//
+//   - no setup section: cd then `spark up` (nothing has started the stack).
+//   - setup fully succeeded: just cd (setup already started the stack, so
+//     printing `spark up` would be wrong).
+//   - setup declined or partially failed: cd then every command still left to
+//     run, so the manifest list doubles as copy-paste recovery instructions.
+func nextSteps(dir string, o setupOutcome) []string {
+	steps := []string{"cd " + dir}
+	if !o.hasSetup {
+		return append(steps, "spark up")
+	}
+	return append(steps, o.remaining...)
+}
+
+// summary prints the styled success block with the next steps derived from the
+// setup outcome. The project is on disk in every path this runs, so the created
+// line always prints; any setup failure has already announced itself via
+// ui.Errorf before this point.
+func summary(bp Boilerplate, dir string, o setupOutcome) {
 	ui.Fprintln(os.Stdout, "")
 	ui.Successf("created %s in %s", bp.Name, dir)
 	ui.Fprintln(os.Stdout, "")
 	ui.Fprintln(os.Stdout, ui.Section.Render("NEXT STEPS"))
-	ui.Fprintln(os.Stdout, "  "+ui.CommandName.Render("cd "+dir))
-	ui.Fprintln(os.Stdout, "  "+ui.CommandName.Render("spark up"))
+	for _, step := range nextSteps(dir, o) {
+		ui.Fprintln(os.Stdout, "  "+ui.CommandName.Render(step))
+	}
 }
 
 var slugNonWord = regexp.MustCompile(`[^a-z0-9]+`)

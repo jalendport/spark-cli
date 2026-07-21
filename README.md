@@ -99,11 +99,13 @@ create:
   replace:
     __PROJECT_NAME__: "{project_name}"
   post: []
+  setup:
+    - docker compose up -d
 ```
 
 - `name` / `description` — shown in the styled help header
 - `commands` — string form for a bare shell one-liner, or map form with `run` and `help`; `{args}` marks where extra CLI arguments land
-- `create` — executed by `spark create` after download: `prompts` are asked interactively and their answers fill `{key}` placeholders in `replace`, `rename` moves shipped template files into place, and `post` runs shell commands from the new project root
+- `create` — executed by `spark create` after download: `prompts` are asked interactively and their answers fill `{key}` placeholders in `replace`, `rename` moves shipped template files into place, and `post` runs shell commands from the new project root. `setup` runs shell commands too, but only once the project has landed in its final directory and after a confirmation prompt — the place to start docker compose, which needs the real project directory for its naming and bind mounts. Decline the prompt, or hit a setup command that fails, and the remaining commands are printed verbatim as next steps so you can finish by hand.
 
 Unknown manifest keys warn instead of failing, so older binaries keep working with newer manifests.
 
