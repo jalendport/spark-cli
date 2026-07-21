@@ -2,8 +2,7 @@
 // new project from a published boilerplate. It fetches the boilerplate registry,
 // downloads the chosen repo as a tarball from codeload.github.com, extracts it
 // stripping the top-level directory, then runs the boilerplate's spark.yml
-// create: section — prompts, renames, token replacement, post commands, and a
-// fresh git repo.
+// create: section — prompts, file copies, token replacement, and a fresh git repo.
 package create
 
 import (
@@ -68,6 +67,7 @@ func Run(boilerplate, directory string) error {
 	}
 
 	target := directory
+	var seeds map[string]string
 	if target == "" {
 		name, err := promptLine(rd, os.Stdout, "Project name")
 		if err != nil {
@@ -77,6 +77,12 @@ func Run(boilerplate, directory string) error {
 		if target == "" {
 			return fmt.Errorf("a project name is required to name the new directory")
 		}
+		// The CLI just asked for the project name to name the directory; seed it
+		// under the manifest's reserved project_name key so the create: section's
+		// own project_name prompt doesn't ask the identical question again. The raw
+		// answer (not the slug) is seeded, so a display-name replacement still gets
+		// the name exactly as typed while a {project_name:slug} token re-slugs it.
+		seeds = map[string]string{"project_name": name}
 	}
 
 	abs, err := filepath.Abs(target)
@@ -86,10 +92,11 @@ func Run(boilerplate, directory string) error {
 
 	// Assemble everything in a temporary sibling directory and move it into place
 	// only once every step succeeds, so any failure leaves nothing half-built
-	// behind (and a pre-existing empty destination untouched). The manifest is
-	// captured here so the setup: commands and the final summary can consult it
-	// after the build closure returns.
+	// behind (and a pre-existing empty destination untouched). The manifest and
+	// the prompt answers are captured here so the setup: commands and the final
+	// summary can consult them after the build closure returns.
 	var m *manifest.Manifest
+	var answers map[string]string
 	err = buildInto(abs, func(dir string) error {
 		ui.Stepf("downloading %s", bp.Repo)
 		if err := downloadBoilerplate(bp.Repo, dir); err != nil {
@@ -100,7 +107,12 @@ func Run(boilerplate, directory string) error {
 			return fmt.Errorf("the boilerplate has no readable %s: %w", manifest.Filename, err)
 		}
 		m = loaded
-		return setupProject(dir, m, rd, os.Stdout)
+		a, err := setupProject(dir, m, rd, os.Stdout, seeds)
+		if err != nil {
+			return err
+		}
+		answers = a
+		return nil
 	})
 	if err != nil {
 		return err
@@ -111,7 +123,9 @@ func Run(boilerplate, directory string) error {
 	// from the working directory, so they must never see the temporary build
 	// dir. A failure prints its own notice and falls through to the summary with
 	// the unfinished commands, but is still returned so the exit code rides up.
-	setup := setupCommands(m)
+	// Placeholders are expanded before the confirm prompt so a declined run's
+	// NEXT STEPS block prints copy-pasteable commands, not raw {key} tokens.
+	setup := expandCommands(setupCommands(m), answers)
 	outcome := setupOutcome{hasSetup: len(setup) > 0}
 	var runErr error
 	switch {
@@ -153,14 +167,23 @@ func runSetup(dir string, setup []string) (remaining []string, err error) {
 
 // setupProject runs the manifest's create: section (when present) against the
 // freshly extracted project at root, then always initializes a git repo — even
-// for a boilerplate with no create: section.
-func setupProject(root string, m *manifest.Manifest, rd *bufio.Reader, out io.Writer) error {
+// for a boilerplate with no create: section. seeds carries any prompt answers
+// the CLI already collected (see Run) so executeCreate can skip re-asking them.
+// It returns the resolved prompt answers so the caller can expand them into the
+// setup: commands; a boilerplate with no create: section yields an empty map.
+func setupProject(root string, m *manifest.Manifest, rd *bufio.Reader, out io.Writer, seeds map[string]string) (map[string]string, error) {
+	answers := map[string]string{}
 	if m.Create != nil {
-		if err := executeCreate(root, m.Create, rd, out); err != nil {
-			return err
+		a, err := executeCreate(root, m.Create, rd, out, seeds)
+		if err != nil {
+			return nil, err
 		}
+		answers = a
 	}
-	return gitInit(root)
+	if err := gitInit(root); err != nil {
+		return nil, err
+	}
+	return answers, nil
 }
 
 // buildInto validates abs as a fresh project directory, then runs fn against a

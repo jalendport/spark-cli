@@ -10,7 +10,7 @@ Every project accumulates its own pile of commands: the docker compose incantati
 
 - **Adapts to the project** — Spark walks up to the nearest `spark.yml` and serves that project's commands on top of a set of built-in verbs
 - **Built-in Docker verbs** — `up`, `down`, `restart`, `logs`, `sh`, and `run` drive any Compose stack with zero configuration
-- **Project scaffolding** — `spark create` turns a boilerplate repo into a running project: prompts, renames, token replacement, and `git init` included
+- **Project scaffolding** — `spark create` turns a boilerplate repo into a running project: prompts, file copies, renames, token replacement, and `git init` included
 - **Disposable Craft instances** — `spark lab` mints throwaway [Craft CMS](https://craftcms.com) installs for plugin development, powered by [Spark Craft Lab](https://github.com/jalendport/spark-craft-lab)
 - **Single static binary** — no npm, no Ruby, no runtime dependencies; install once and every project just works
 
@@ -62,7 +62,7 @@ spark create                   # pick a boilerplate interactively
 spark create craft my-site     # scaffold straight into ./my-site
 ```
 
-`spark create` downloads the boilerplate, asks its questions, applies its setup (file renames, token replacement, post commands), and initializes a fresh git repository. A failed create leaves nothing behind.
+`spark create` downloads the boilerplate, asks its questions, copies and renames shipped files into place, fills the answers into the project's text files, runs any post commands, and initializes a fresh git repository — then offers to run the boilerplate's setup commands. A failed create leaves nothing behind.
 
 ### Testing Craft plugins
 
@@ -94,18 +94,22 @@ create:
   prompts:
     - key: project_name
       label: Project name
+  copy:
+    .env.example.dev: .env
   rename:
     composer.json.project: composer.json
   replace:
     __PROJECT_NAME__: "{project_name}"
-  post: []
+    __PROJECT_SLUG__: "{project_name:slug}"
   setup:
-    - docker compose up -d
+    - spark up --wait
+    - spark composer craft-setup
 ```
 
 - `name` / `description` — shown in the styled help header
 - `commands` — string form for a bare shell one-liner, or map form with `run` and `help`; `{args}` marks where extra CLI arguments land
-- `create` — executed by `spark create` after download: `prompts` are asked interactively and their answers fill `{key}` placeholders in `replace`, `rename` moves shipped template files into place, and `post` runs shell commands from the new project root. `setup` runs shell commands too, but only once the project has landed in its final directory and after a confirmation prompt — the place to start docker compose, which needs the real project directory for its naming and bind mounts. Decline the prompt, or hit a setup command that fails, and the remaining commands are printed verbatim as next steps so you can finish by hand.
+- `create` — executed by `spark create` after download: `prompts` are asked interactively, `copy` duplicates shipped files into place (source → destination, e.g. seeding `.env` from a committed `.env.example.dev` while keeping the original), `rename` moves shipped template files into place (e.g. `composer.json.project` → `composer.json`), and the answers fill `{key}` placeholders in `replace`, which is then substituted across the project's text files. A `{key:slug}` placeholder slugifies the answer, so one prompt can fill both a display name and its slug. `spark.yml` itself is exempt from `replace`, so the manifest's own tokens are never rewritten in the new project. `post` runs shell commands from the new project root. `setup` runs shell commands too, but only once the project has landed in its final directory and after a confirmation prompt — the place to start docker compose, which needs the real project directory for its naming and bind mounts. Because `spark.yml` is skipped by `replace`, `post` and `setup` command lines support the same `{key}` and `{key:slug}` placeholders as `replace` values, so an answer can be spliced straight into a command (e.g. `docker compose exec -e SITE_NAME="{project_name}" php composer craft-setup`). Decline the prompt, or hit a setup command that fails, and the remaining commands are printed verbatim — fully expanded — as next steps so you can finish by hand.
+- `project_name` is a reserved prompt key: when you run `spark create` without a directory argument, the CLI already asked for the project name to name the directory, so a `project_name` prompt is pre-answered with what you typed rather than asked again.
 
 Unknown manifest keys warn instead of failing, so older binaries keep working with newer manifests.
 

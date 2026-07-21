@@ -42,6 +42,25 @@ create:
 	}
 }
 
+func TestLoadCreateCopy(t *testing.T) {
+	dir := writeManifest(t, `
+name: demo
+create:
+  copy:
+    .env.example.dev: .env
+`)
+	m, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if m.Create == nil {
+		t.Fatal("create section did not parse")
+	}
+	if m.Create.Copy[".env.example.dev"] != ".env" {
+		t.Errorf("copy = %v", m.Create.Copy)
+	}
+}
+
 // A create: section without setup: must leave Setup empty, never nil-dereference.
 func TestLoadCreateWithoutSetup(t *testing.T) {
 	dir := writeManifest(t, `

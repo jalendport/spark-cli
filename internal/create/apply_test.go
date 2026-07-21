@@ -92,7 +92,7 @@ func TestRunPrompts(t *testing.T) {
 		},
 	}
 	rd := bufio.NewReader(strings.NewReader("acme\nwidget\n"))
-	answers, err := runPrompts(c, rd, io.Discard)
+	answers, err := runPrompts(c, rd, io.Discard, nil)
 	if err != nil {
 		t.Fatalf("runPrompts: %v", err)
 	}
@@ -160,22 +160,69 @@ func TestRunPromptsTruncatedInput(t *testing.T) {
 	}
 	// Input ends after the first answer; the second prompt gets no text.
 	rd := bufio.NewReader(strings.NewReader("acme\n"))
-	if _, err := runPrompts(c, rd, io.Discard); err == nil {
+	if _, err := runPrompts(c, rd, io.Discard, nil); err == nil {
 		t.Fatal("expected an error when input ends before all prompts are answered")
 	}
 }
 
 func TestRunPostPropagatesExitCode(t *testing.T) {
-	err := runPost(t.TempDir(), []string{"exit 3"})
+	err := runPost(t.TempDir(), []string{"exit 3"}, nil)
 	code, ok := proc.Code(err)
 	if !ok || code != 3 {
 		t.Fatalf("runPost exit code = (%d, %v), want (3, true)", code, ok)
 	}
 }
 
+func TestRunPostExpandsPlaceholders(t *testing.T) {
+	root := t.TempDir()
+	answers := map[string]string{"project_name": "My Cool Site"}
+	post := []string{`echo {project_name} > name.txt`, `echo {project_name:slug} > slug.txt`}
+	if err := runPost(root, post, answers); err != nil {
+		t.Fatalf("runPost: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "name.txt")); strings.TrimSpace(string(got)) != "My Cool Site" {
+		t.Errorf("name.txt = %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "slug.txt")); strings.TrimSpace(string(got)) != "my-cool-site" {
+		t.Errorf("slug.txt = %q", got)
+	}
+}
+
+func TestExpandCommands(t *testing.T) {
+	answers := map[string]string{"project_name": "My Cool Site"}
+	cmds := []string{
+		`docker compose exec -e SITE_NAME="{project_name}" php composer craft-setup`,
+		"spark composer install {project_name:slug}",
+	}
+	got := expandCommands(cmds, answers)
+	want := []string{
+		`docker compose exec -e SITE_NAME="My Cool Site" php composer craft-setup`,
+		"spark composer install my-cool-site",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expandCommands = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("expandCommands[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestExpandCommandsPassThrough(t *testing.T) {
+	cmds := []string{"spark up", "spark composer install"}
+	got := expandCommands(cmds, map[string]string{})
+	for i := range cmds {
+		if got[i] != cmds[i] {
+			t.Errorf("expandCommands[%d] = %q, want %q", i, got[i], cmds[i])
+		}
+	}
+}
+
 func TestExecuteCreate(t *testing.T) {
 	root := t.TempDir()
 	writeFileT(t, filepath.Join(root, "composer.json.project"), `{"name":"__VENDOR__/__PROJECT__"}`)
+	writeFileT(t, filepath.Join(root, ".env.example.dev"), "APP=__PROJECT__")
 
 	c := &manifest.Create{
 		Prompts: []struct {
@@ -185,12 +232,13 @@ func TestExecuteCreate(t *testing.T) {
 			{Key: "vendor", Label: "Vendor"},
 			{Key: "project", Label: "Project"},
 		},
+		Copy:    map[string]string{".env.example.dev": ".env"},
 		Rename:  map[string]string{"composer.json.project": "composer.json"},
 		Replace: map[string]string{"__VENDOR__": "{vendor}", "__PROJECT__": "{project}"},
 		Post:    []string{"echo done > POST.txt"},
 	}
 	rd := bufio.NewReader(strings.NewReader("acme\nwidget\n"))
-	if err := executeCreate(root, c, rd, io.Discard); err != nil {
+	if _, err := executeCreate(root, c, rd, io.Discard, nil); err != nil {
 		t.Fatalf("executeCreate: %v", err)
 	}
 
@@ -198,7 +246,164 @@ func TestExecuteCreate(t *testing.T) {
 	if string(got) != `{"name":"acme/widget"}` {
 		t.Errorf("composer.json = %q", got)
 	}
+	if got, _ := os.ReadFile(filepath.Join(root, ".env")); string(got) != "APP=widget" {
+		t.Errorf(".env = %q", got)
+	}
 	if _, err := os.Stat(filepath.Join(root, "POST.txt")); err != nil {
 		t.Errorf("post command did not run: %v", err)
+	}
+}
+
+func TestApplyCopy(t *testing.T) {
+	root := t.TempDir()
+	writeFileT(t, filepath.Join(root, ".env.example.dev"), "APP_ENV=dev")
+	if err := applyCopy(root, map[string]string{".env.example.dev": ".env"}); err != nil {
+		t.Fatalf("applyCopy: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, ".env")); string(got) != "APP_ENV=dev" {
+		t.Errorf(".env = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".env.example.dev")); err != nil {
+		t.Errorf("copy source missing after copy: %v", err)
+	}
+}
+
+func TestApplyCopyPreservesMode(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "run.sh")
+	writeFileT(t, src, "#!/bin/sh\n")
+	if err := os.Chmod(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyCopy(root, map[string]string{"run.sh": "bin/run.sh"}); err != nil {
+		t.Fatalf("applyCopy: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "bin", "run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("copied mode = %o, want 755", info.Mode().Perm())
+	}
+}
+
+func TestApplyCopyMissingSource(t *testing.T) {
+	root := t.TempDir()
+	if err := applyCopy(root, map[string]string{"nope": "dst"}); err == nil {
+		t.Error("expected an error copying a missing source")
+	}
+}
+
+func TestApplyCopyEscapesRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFileT(t, filepath.Join(root, "a.txt"), "a")
+	if err := applyCopy(root, map[string]string{"a.txt": "../escape.txt"}); err == nil {
+		t.Error("expected an error when a copy escapes the project directory")
+	}
+}
+
+func TestApplyCopyDestinationCollision(t *testing.T) {
+	root := t.TempDir()
+	writeFileT(t, filepath.Join(root, "a.txt"), "a")
+	writeFileT(t, filepath.Join(root, "b.txt"), "b")
+	if err := applyCopy(root, map[string]string{"a.txt": "out", "b.txt": "out"}); err == nil {
+		t.Fatal("expected colliding copy destinations to be rejected")
+	}
+}
+
+func TestApplyCopyChainRejected(t *testing.T) {
+	root := t.TempDir()
+	writeFileT(t, filepath.Join(root, "a"), "a")
+	writeFileT(t, filepath.Join(root, "b"), "b")
+	if err := applyCopy(root, map[string]string{"a": "b", "b": "c"}); err == nil {
+		t.Fatal("expected a copy whose destination is another copy's source to be rejected")
+	}
+}
+
+func TestApplyCopyOverwritesShippedFile(t *testing.T) {
+	root := t.TempDir()
+	writeFileT(t, filepath.Join(root, ".env.example.dev"), "template")
+	writeFileT(t, filepath.Join(root, ".env"), "placeholder")
+	if err := applyCopy(root, map[string]string{".env.example.dev": ".env"}); err != nil {
+		t.Fatalf("applyCopy: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, ".env")); string(got) != "template" {
+		t.Errorf(".env = %q, want the copied template content", got)
+	}
+}
+
+func TestRunPromptsSkipsSeeded(t *testing.T) {
+	c := &manifest.Create{
+		Prompts: []struct {
+			Key   string `yaml:"key"`
+			Label string `yaml:"label"`
+		}{
+			{Key: "project_name", Label: "Project name"},
+			{Key: "vendor", Label: "Vendor"},
+		},
+	}
+	rd := bufio.NewReader(strings.NewReader("acme\n"))
+	answers, err := runPrompts(c, rd, io.Discard, map[string]string{"project_name": "My Site"})
+	if err != nil {
+		t.Fatalf("runPrompts: %v", err)
+	}
+	if answers["project_name"] != "My Site" {
+		t.Errorf("seeded answer = %q, want %q", answers["project_name"], "My Site")
+	}
+	if answers["vendor"] != "acme" {
+		t.Errorf("unseeded answer = %q, want %q", answers["vendor"], "acme")
+	}
+}
+
+func TestExpandSlugFilter(t *testing.T) {
+	answers := map[string]string{"project_name": "My Cool Site"}
+	if got := expand("{project_name}", answers); got != "My Cool Site" {
+		t.Errorf("expand plain = %q", got)
+	}
+	if got := expand("{project_name:slug}", answers); got != "my-cool-site" {
+		t.Errorf("expand slug = %q", got)
+	}
+}
+
+func TestApplyReplaceSkipsRootManifest(t *testing.T) {
+	root := t.TempDir()
+	writeFileT(t, filepath.Join(root, manifest.Filename), "replace:\n  __TOKEN__: value\n")
+	writeFileT(t, filepath.Join(root, "nested", manifest.Filename), "__TOKEN__ here")
+	writeFileT(t, filepath.Join(root, "file.txt"), "__TOKEN__ here")
+	if err := applyReplace(root, map[string]string{"__TOKEN__": "REPLACED"}, nil); err != nil {
+		t.Fatalf("applyReplace: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, manifest.Filename)); string(got) != "replace:\n  __TOKEN__: value\n" {
+		t.Errorf("root manifest was rewritten: %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "nested", manifest.Filename)); string(got) != "REPLACED here" {
+		t.Errorf("nested manifest not rewritten: %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "file.txt")); string(got) != "REPLACED here" {
+		t.Errorf("file.txt = %q", got)
+	}
+}
+
+func TestExecuteCreateSeededPrompt(t *testing.T) {
+	root := t.TempDir()
+	writeFileT(t, filepath.Join(root, "config.txt"), "name=__NAME__ slug=__SLUG__")
+
+	c := &manifest.Create{
+		Prompts: []struct {
+			Key   string `yaml:"key"`
+			Label string `yaml:"label"`
+		}{
+			{Key: "project_name", Label: "Project name"},
+		},
+		Replace: map[string]string{"__NAME__": "{project_name}", "__SLUG__": "{project_name:slug}"},
+	}
+	rd := bufio.NewReader(strings.NewReader(""))
+	if _, err := executeCreate(root, c, rd, io.Discard, map[string]string{"project_name": "My Cool Site"}); err != nil {
+		t.Fatalf("executeCreate: %v", err)
+	}
+
+	got, _ := os.ReadFile(filepath.Join(root, "config.txt"))
+	if string(got) != "name=My Cool Site slug=my-cool-site" {
+		t.Errorf("config.txt = %q", got)
 	}
 }

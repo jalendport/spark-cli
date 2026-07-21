@@ -167,6 +167,28 @@ func TestNextSteps(t *testing.T) {
 	}
 }
 
+func TestNextStepsExpandsDeclinedSetup(t *testing.T) {
+	answers := map[string]string{"project_name": "My Cool Site"}
+	setup := expandCommands([]string{
+		`docker compose exec -e SITE_NAME="{project_name}" php composer craft-setup`,
+		"spark composer install {project_name:slug}",
+	}, answers)
+	got := nextSteps("my-cool-site", setupOutcome{hasSetup: true, remaining: setup})
+	want := []string{
+		"cd my-cool-site",
+		`docker compose exec -e SITE_NAME="My Cool Site" php composer craft-setup`,
+		"spark composer install my-cool-site",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("nextSteps = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("nextSteps[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestRunSetupPropagatesExitCodeAndRemaining(t *testing.T) {
 	// The first command succeeds, the second exits nonzero: the exit code must
 	// ride up and the failing command plus the unrun tail must come back.
@@ -218,8 +240,12 @@ func TestSetupProjectWithoutCreateStillInitsGit(t *testing.T) {
 	root := t.TempDir()
 	m := &manifest.Manifest{} // Create is nil
 	rd := bufio.NewReader(strings.NewReader(""))
-	if err := setupProject(root, m, rd, io.Discard); err != nil {
+	answers, err := setupProject(root, m, rd, io.Discard, nil)
+	if err != nil {
 		t.Fatalf("setupProject: %v", err)
+	}
+	if len(answers) != 0 {
+		t.Errorf("answers = %v, want empty for a boilerplate with no create: section", answers)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
 		t.Errorf("git init did not run without a create: section: %v", err)

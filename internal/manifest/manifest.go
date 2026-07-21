@@ -31,13 +31,13 @@ type Command struct {
 	Help string
 }
 
-// Create mirrors the create-time setup schema. v1 parses it (so malformed
-// sections surface early) but does not act on it — implementation is deferred.
+// Create mirrors the create-time setup schema executed by `spark create`.
 type Create struct {
 	Prompts []struct {
 		Key   string `yaml:"key"`
 		Label string `yaml:"label"`
 	} `yaml:"prompts"`
+	Copy    map[string]string `yaml:"copy"`
 	Rename  map[string]string `yaml:"rename"`
 	Replace map[string]string `yaml:"replace"`
 	Post    []string          `yaml:"post"`
@@ -57,7 +57,7 @@ type Manifest struct {
 	Name        string
 	Description string
 	Commands    []Command // ordered as written, for stable help output
-	Create      *Create   // parsed and ignored in v1
+	Create      *Create   // create-time setup, executed by `spark create`
 
 	Root        string   // absolute path of the directory containing spark.yml
 	UnknownKeys []string // top-level keys we didn't recognize
