@@ -64,8 +64,7 @@ func mint(c *ctx, assets string, p mintParams) (instanceMeta, error) {
 	// 3. Rewrite composer.json (asset-packagist + path repo + require + platform).
 	// The skeleton already ships the lab module's PSR-4 mapping, so mint leaves
 	// autoload alone.
-	pluginVersion := latestGitTag(c.pluginDir)
-	if err := rewriteComposer(filepath.Join(dest, "composer.json"), c.pluginName, pluginVersion, p.craftPin, p.phpTag); err != nil {
+	if err := rewriteComposer(filepath.Join(dest, "composer.json"), c.pluginName, pluginVersion(c.pluginDir), p.craftPin, p.phpTag); err != nil {
 		return instanceMeta{}, err
 	}
 
@@ -142,6 +141,22 @@ func renderTemplate(path string, mapping map[string]string) error {
 // nightly — would make the path repo's `versions` pin invalid and fail late in
 // composer install, so they fall back to 0.1.0.
 var composerVersionRe = regexp.MustCompile(`^\d+(\.\d+){0,3}([-+][0-9A-Za-z.-]+)?$`)
+
+// pluginVersion resolves the path repo's version pin for the plugin at dir:
+// its own composer.json "version" field when declared and Composer-valid,
+// else its latest git tag, else the 0.1.0 stub. A plugin's declared version is
+// the more authoritative source — it's what a real `composer require` would
+// resolve — so it takes precedence over inferring one from git tags.
+func pluginVersion(dir string) string {
+	if data, err := os.ReadFile(filepath.Join(dir, "composer.json")); err == nil {
+		if m, err := parseComposer(data); err == nil {
+			if v := stringField(m, "version"); v != "" && composerVersionRe.MatchString(v) {
+				return v
+			}
+		}
+	}
+	return latestGitTag(dir)
+}
 
 // latestGitTag returns the plugin's latest git tag (leading v stripped) when it
 // is a Composer-acceptable version, else the fallback 0.1.0, so the path repo's
